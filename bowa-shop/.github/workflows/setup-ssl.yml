@@ -1,0 +1,75 @@
+name: Setup SSL Certificates
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain name (without subdomains)'
+        required: true
+        type: string
+      email:
+        description: "Email for Let's Encrypt notifications"
+        required: true
+        type: string
+
+jobs:
+  setup-ssl:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+          
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+          
+      - name: Install and configure SSL certificates
+        run: |
+          ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'ENDSSH'
+            set -e
+            
+            # Colors for output
+            GREEN='\033[0;32m'
+            YELLOW='\033[1;33m'
+            NC='\033[0m'
+            
+            echo -e "${GREEN}Setting up SSL certificates with Let's Encrypt...${NC}"
+            
+            # Use sudo if not root
+            SUDO_CMD=""
+            if [ "$EUID" -ne 0 ]; then
+                SUDO_CMD="sudo"
+            fi
+            
+            echo -e "${YELLOW}1. Install Certbot...${NC}"
+            $SUDO_CMD apt update
+            $SUDO_CMD apt install -y certbot python3-certbot-nginx
+            
+            echo -e "${YELLOW}2. Stop NGINX temporarily...${NC}"
+            $SUDO_CMD systemctl stop nginx
+            
+            echo -e "${YELLOW}3. Obtain SSL certificates...${NC}"
+            $SUDO_CMD certbot certonly --standalone \
+              --non-interactive \
+              --agree-tos \
+              --email ${{ inputs.email }} \
+              -d ${{ inputs.domain }} \
+              -d api.${{ inputs.domain }} \
+              -d admin.${{ inputs.domain }}
+            
+            echo -e "${YELLOW}4. Setup automatic renewal...${NC}"
+            $SUDO_CMD crontab -l | { cat; echo "0 12 * * * /usr/bin/certbot renew --quiet"; } | $SUDO_CMD crontab -
+            
+            echo -e "${YELLOW}5. Start NGINX...${NC}"
+            $SUDO_CMD systemctl start nginx
+            
+            echo -e "${GREEN}SSL certificates setup completed!${NC}"
+            echo "Certificates are valid for:"
+            echo "- ${{ inputs.domain }}"
+            echo "- api.${{ inputs.domain }}"
+            echo "- admin.${{ inputs.domain }}"
+          ENDSSH 
