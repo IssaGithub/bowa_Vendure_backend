@@ -57,25 +57,40 @@ jobs:
           # Clean up any temporary files first
           find . -name "*.tmp" -delete || true
           find . -name "*.lock" -delete || true
+          find . -name "*.tsbuildinfo" -delete || true
           
-          # Create stable tar archive
-          tar --exclude=node_modules \
-              --exclude=.git \
-              --exclude=.github \
-              --exclude=*.log \
-              --exclude=*.tmp \
-              --exclude=*.lock \
-              --exclude=vendure.sqlite \
-              --exclude=.next \
-              --exclude=.cache \
-              --exclude=.npm \
-              --exclude=.nuxt \
-              --exclude=dist/.tsbuildinfo \
-              --exclude=.DS_Store \
-              --exclude=Thumbs.db \
-              --exclude=logs \
-              --exclude=.nyc_output \
-              -czf deployment.tar.gz .
+          # Wait for any file operations to complete
+          sleep 3
+          
+          # Create deployment directory approach (more stable)
+          mkdir -p deployment-staging
+          
+          # Copy files excluding problematic ones
+          rsync -av \
+            --exclude=node_modules \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=*.log \
+            --exclude=*.tmp \
+            --exclude=*.lock \
+            --exclude=vendure.sqlite \
+            --exclude=.next \
+            --exclude=.cache \
+            --exclude=.npm \
+            --exclude=.nuxt \
+            --exclude=dist/.tsbuildinfo \
+            --exclude=.DS_Store \
+            --exclude=Thumbs.db \
+            --exclude=logs \
+            --exclude=.nyc_output \
+            --exclude=coverage \
+            . deployment-staging/
+          
+          # Create archive from staging directory
+          tar -czf deployment.tar.gz -C deployment-staging .
+          
+          # Cleanup staging
+          rm -rf deployment-staging
             
       - name: Upload deployment artifact
         uses: actions/upload-artifact@v4
