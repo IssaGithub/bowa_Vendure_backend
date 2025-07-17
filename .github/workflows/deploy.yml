@@ -1,0 +1,133 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+  APP_NAME: 'bowa-backend'
+  APP_DIR: '/var/www/bowa-backend'
+  SERVICE_NAME: 'bowa-backend'
+  BACKEND_PORT: 3000
+  ADMIN_PORT: 3002
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Build application
+        run: npm run build
+        
+      - name: Create deployment package
+        run: |
+          # Clean up any temporary files first
+          find . -name "*.tmp" -delete || true
+          find . -name "*.lock" -delete || true
+          find . -name "*.tsbuildinfo" -delete || true
+          
+          # Wait for any file operations to complete
+          sleep 3
+          
+          # Create deployment directory approach (more stable)
+          mkdir -p deployment-staging
+          
+          # Copy files excluding problematic ones
+          rsync -av \
+            --exclude=node_modules \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=*.log \
+            --exclude=*.tmp \
+            --exclude=*.lock \
+            --exclude=vendure.sqlite \
+            --exclude=.next \
+            --exclude=.cache \
+            --exclude=.npm \
+            --exclude=.nuxt \
+            --exclude=dist/.tsbuildinfo \
+            --exclude=.DS_Store \
+            --exclude=Thumbs.db \
+            --exclude=logs \
+            --exclude=.nyc_output \
+            --exclude=coverage \
+            . deployment-staging/
+          
+          # Create archive from staging directory
+          tar -czf deployment.tar.gz -C deployment-staging .
+          
+          # Cleanup staging
+          rm -rf deployment-staging
+            
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-package
+          path: deployment.tar.gz
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Download deployment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-package
+          
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+          
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+          
+      - name: Deploy to VPS
+        run: |
+          scp deployment.tar.gz ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/
+          ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'ENDSSH'
+            set -e
+            sudo mkdir -p ${{ env.APP_DIR }}
+            if pm2 list | grep -q "${{ env.SERVICE_NAME }}"; then
+                pm2 stop ${{ env.SERVICE_NAME }}-server || true
+                pm2 delete ${{ env.SERVICE_NAME }}-server || true
+            fi
+            cd ${{ env.APP_DIR }}
+            sudo tar -xzf /tmp/deployment.tar.gz -C ${{ env.APP_DIR }}
+            sudo chown -R www-data:www-data ${{ env.APP_DIR }}
+            sudo -u www-data npm install --production
+            sudo -u www-data tee .env > /dev/null << EOL
+            APP_ENV=production
+            PORT=${{ env.BACKEND_PORT }}
+            SUPERADMIN_USERNAME=${{ secrets.SUPERADMIN_USERNAME }}
+            SUPERADMIN_PASSWORD=${{ secrets.SUPERADMIN_PASSWORD }}
+            COOKIE_SECRET=${{ secrets.COOKIE_SECRET }}
+            EOL
+            sudo chown www-data:www-data .env
+            sudo chmod 600 .env
+            mkdir -p logs
+            sudo chown -R www-data:www-data logs
+            sudo -u www-data pm2 start dist/index.js --name "${{ env.SERVICE_NAME }}-server"
+            sudo -u www-data pm2 save
+            rm -f /tmp/deployment.tar.gz
+            echo "Deployment completed successfully!"
+          ENDSSH 
