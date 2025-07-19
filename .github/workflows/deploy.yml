@@ -40,35 +40,45 @@ jobs:
           find . -name "*.lock" -delete || true
           find . -name "*.tsbuildinfo" -delete || true
           
-          # Wait for any file operations to complete
-          sleep 3
+          # Stop any background processes
+          sudo pkill -f "npm" || true
+          sudo pkill -f "node" || true
           
-          # Create deployment directory approach (more stable)
+          # Wait for any file operations to complete
+          sleep 5
+          
+          # Create deployment directory with only essential files
           mkdir -p deployment-staging
           
-          # Copy files excluding problematic ones
-          rsync -av \
-            --exclude=node_modules \
-            --exclude=.git \
-            --exclude=.github \
-            --exclude=*.log \
-            --exclude=*.tmp \
-            --exclude=*.lock \
-            --exclude=vendure.sqlite \
-            --exclude=.next \
-            --exclude=.cache \
-            --exclude=.npm \
-            --exclude=.nuxt \
-            --exclude=dist/.tsbuildinfo \
-            --exclude=.DS_Store \
-            --exclude=Thumbs.db \
-            --exclude=logs \
-            --exclude=.nyc_output \
-            --exclude=coverage \
-            . deployment-staging/
+          # Copy only essential files for production
+          echo "Copying essential files..."
+          cp package.json deployment-staging/ || true
+          cp -r dist deployment-staging/ || true
+          cp -r src deployment-staging/ || true
+          cp -r static deployment-staging/ || true
+          cp tsconfig.json deployment-staging/ || true
+          cp vendure-config.ts deployment-staging/ || true
           
-          # Create archive from staging directory
-          tar -czf deployment.tar.gz -C deployment-staging .
+          # Create a clean package.json for production
+          cd deployment-staging
+          
+          # Create archive from staging directory (exclude development files)
+          cd ..
+          tar --exclude='*.log' \
+              --exclude='*.tmp' \
+              --exclude='node_modules' \
+              --exclude='.git*' \
+              --exclude='coverage' \
+              --exclude='test' \
+              --exclude='tests' \
+              --exclude='spec' \
+              --exclude='*.spec.*' \
+              --exclude='*.test.*' \
+              -czf deployment.tar.gz -C deployment-staging .
+          
+          # Verify archive
+          echo "Archive contents:"
+          tar -tzf deployment.tar.gz | head -20
           
           # Cleanup staging
           rm -rf deployment-staging
@@ -131,9 +141,15 @@ jobs:
               sudo apt install -y nginx
           fi
           
-          # Create application directory
+          # Create application directory and setup user
           echo "📁 Setting up application directory..."
           sudo mkdir -p ${{ env.APP_DIR }}
+          sudo mkdir -p /var/www/.npm
+          sudo mkdir -p /var/log/pm2
+          
+          # Ensure www-data user exists and has proper shell
+          sudo usermod -s /bin/bash www-data || true
+          sudo chown -R www-data:www-data /var/www/
           
           # Stop existing PM2 processes
           if pm2 list | grep -q "${{ env.SERVICE_NAME }}"; then
@@ -145,12 +161,34 @@ jobs:
           # Extract application
           echo "📦 Extracting application..."
           cd ${{ env.APP_DIR }}
-          sudo tar -xzf /tmp/deployment.tar.gz -C ${{ env.APP_DIR }}
+          
+          # Clean existing installation
+          sudo rm -rf * .* 2>/dev/null || true
+          
+          # Extract with error handling
+          if sudo tar -xzf /tmp/deployment.tar.gz -C ${{ env.APP_DIR }} 2>/dev/null; then
+              echo "✅ Extraction successful"
+          else
+              echo "⚠️ Extraction had warnings but continued"
+          fi
+          
           sudo chown -R www-data:www-data ${{ env.APP_DIR }}
+          
+          # Fix npm cache permissions
+          echo "🔧 Fixing npm permissions..."
+          sudo chown -R www-data:www-data /var/www/.npm || true
+          sudo mkdir -p /var/www/.npm
+          sudo chown -R www-data:www-data /var/www/.npm
+          
+          # Clean npm cache
+          sudo -u www-data npm cache clean --force || true
+          
+          # Remove any corrupted node_modules
+          sudo rm -rf node_modules package-lock.json || true
           
           # Install dependencies
           echo "📥 Installing dependencies..."
-          sudo -u www-data npm install --production
+          sudo -u www-data npm install --production --no-package-lock
           
           # Create environment file
           echo "⚙️ Creating environment configuration..."
@@ -187,4 +225,20 @@ jobs:
           echo "✅ Deployment completed successfully!"
           echo "📊 PM2 Status:"
           pm2 status
+          
+          # Verify application is running
+          echo "🔍 Verifying application..."
+          sleep 10
+          if curl -f http://localhost:${{ env.BACKEND_PORT }}/health 2>/dev/null; then
+              echo "✅ Application is responding on port ${{ env.BACKEND_PORT }}"
+          else
+              echo "⚠️ Application may not be responding yet (check logs with: pm2 logs)"
+          fi
+          
+          # Show application info
+          echo "🌐 Application Details:"
+          echo "  - Directory: ${{ env.APP_DIR }}"
+          echo "  - Port: ${{ env.BACKEND_PORT }}"
+          echo "  - Logs: pm2 logs ${{ env.SERVICE_NAME }}-server"
+          echo "  - Status: pm2 status"
           ENDSSH 
