@@ -152,11 +152,13 @@ jobs:
           sudo chown -R www-data:www-data /var/www/
           
           # Stop existing PM2 processes
-          if pm2 list | grep -q "${{ env.SERVICE_NAME }}"; then
-              echo "🛑 Stopping existing processes..."
-              pm2 stop ${{ env.SERVICE_NAME }}-server || true
-              pm2 delete ${{ env.SERVICE_NAME }}-server || true
-          fi
+          echo "🛑 Cleaning up existing processes..."
+          pm2 stop all || true
+          pm2 delete all || true
+          pm2 kill || true
+          
+          # Wait for cleanup
+          sleep 3
           
           # Extract application
           echo "📦 Extracting application..."
@@ -209,7 +211,7 @@ jobs:
           
           # Start application with PM2
           echo "🚀 Starting application..."
-          sudo -u www-data pm2 start dist/index.js --name "${{ env.SERVICE_NAME }}-server"
+          sudo -u www-data pm2 start dist/index.js --name "${{ env.SERVICE_NAME }}-server" --force
           sudo -u www-data pm2 save
           
           # Setup PM2 startup
