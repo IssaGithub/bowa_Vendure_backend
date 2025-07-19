@@ -105,29 +105,86 @@ jobs:
         run: |
           scp deployment.tar.gz ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/
           ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'ENDSSH'
-            set -e
-            sudo mkdir -p ${{ env.APP_DIR }}
-            if pm2 list | grep -q "${{ env.SERVICE_NAME }}"; then
-                pm2 stop ${{ env.SERVICE_NAME }}-server || true
-                pm2 delete ${{ env.SERVICE_NAME }}-server || true
-            fi
-            cd ${{ env.APP_DIR }}
-            sudo tar -xzf /tmp/deployment.tar.gz -C ${{ env.APP_DIR }}
-            sudo chown -R www-data:www-data ${{ env.APP_DIR }}
-            sudo -u www-data npm install --production
-            sudo -u www-data tee .env > /dev/null << EOL
-            APP_ENV=production
-            PORT=${{ env.BACKEND_PORT }}
-            SUPERADMIN_USERNAME=${{ secrets.SUPERADMIN_USERNAME }}
-            SUPERADMIN_PASSWORD=${{ secrets.SUPERADMIN_PASSWORD }}
-            COOKIE_SECRET=${{ secrets.COOKIE_SECRET }}
-            EOL
-            sudo chown www-data:www-data .env
-            sudo chmod 600 .env
-            mkdir -p logs
-            sudo chown -R www-data:www-data logs
-            sudo -u www-data pm2 start dist/index.js --name "${{ env.SERVICE_NAME }}-server"
-            sudo -u www-data pm2 save
-            rm -f /tmp/deployment.tar.gz
-            echo "Deployment completed successfully!"
+          set -e
+          
+          echo "🚀 Starting deployment..."
+          
+          # Update system
+          sudo apt update
+          
+          # Install Node.js 20 if not present
+          if ! command -v node &> /dev/null; then
+              echo "📦 Installing Node.js..."
+              curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+              sudo apt-get install -y nodejs
+          fi
+          
+          # Install PM2 globally if not present
+          if ! command -v pm2 &> /dev/null; then
+              echo "📦 Installing PM2..."
+              sudo npm install -g pm2
+          fi
+          
+          # Install NGINX if not present
+          if ! command -v nginx &> /dev/null; then
+              echo "📦 Installing NGINX..."
+              sudo apt install -y nginx
+          fi
+          
+          # Create application directory
+          echo "📁 Setting up application directory..."
+          sudo mkdir -p ${{ env.APP_DIR }}
+          
+          # Stop existing PM2 processes
+          if pm2 list | grep -q "${{ env.SERVICE_NAME }}"; then
+              echo "🛑 Stopping existing processes..."
+              pm2 stop ${{ env.SERVICE_NAME }}-server || true
+              pm2 delete ${{ env.SERVICE_NAME }}-server || true
+          fi
+          
+          # Extract application
+          echo "📦 Extracting application..."
+          cd ${{ env.APP_DIR }}
+          sudo tar -xzf /tmp/deployment.tar.gz -C ${{ env.APP_DIR }}
+          sudo chown -R www-data:www-data ${{ env.APP_DIR }}
+          
+          # Install dependencies
+          echo "📥 Installing dependencies..."
+          sudo -u www-data npm install --production
+          
+          # Create environment file
+          echo "⚙️ Creating environment configuration..."
+          sudo -u www-data tee .env > /dev/null << 'EOL'
+          APP_ENV=production
+          PORT=${{ env.BACKEND_PORT }}
+          SUPERADMIN_USERNAME=${{ secrets.SUPERADMIN_USERNAME }}
+          SUPERADMIN_PASSWORD=${{ secrets.SUPERADMIN_PASSWORD }}
+          COOKIE_SECRET=${{ secrets.COOKIE_SECRET }}
+          EOL
+          
+          sudo chown www-data:www-data .env
+          sudo chmod 600 .env
+          
+          # Create logs directory
+          mkdir -p logs
+          sudo chown -R www-data:www-data logs
+          
+          # Start application with PM2
+          echo "🚀 Starting application..."
+          sudo -u www-data pm2 start dist/index.js --name "${{ env.SERVICE_NAME }}-server"
+          sudo -u www-data pm2 save
+          
+          # Setup PM2 startup
+          sudo env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u www-data --hp /var/www
+          
+          # Enable and start nginx
+          sudo systemctl enable nginx
+          sudo systemctl start nginx
+          
+          # Cleanup
+          rm -f /tmp/deployment.tar.gz
+          
+          echo "✅ Deployment completed successfully!"
+          echo "📊 PM2 Status:"
+          pm2 status
           ENDSSH 
