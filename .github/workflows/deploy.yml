@@ -114,7 +114,7 @@ jobs:
       - name: Deploy to VPS
         run: |
           scp deployment.tar.gz ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/
-          ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'ENDSSH'
+          ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
           set -e
           
           echo "🚀 Starting deployment..."
@@ -241,4 +241,4 @@ jobs:
           echo "  - Port: ${{ env.BACKEND_PORT }}"
           echo "  - Logs: pm2 logs ${{ env.SERVICE_NAME }}-server"
           echo "  - Status: pm2 status"
-          ENDSSH 
+          EOF
