@@ -18,11 +18,13 @@
     "@vendure/email-plugin": "3.3.5",
     "@vendure/graphiql-plugin": "3.3.5",
     "better-sqlite3": "11.10.0",
-    "dotenv": "17.0.0"
+    "dotenv": "17.0.0",
+    "pg": "^8.11.3"
   },
   "devDependencies": {
     "@vendure/cli": "3.3.5",
     "concurrently": "9.2.0",
-    "typescript": "5.8.2"
+    "typescript": "5.8.2",
+    "@types/pg": "^8.10.9"
   }
 }

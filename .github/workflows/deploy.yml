@@ -221,6 +221,98 @@ jobs:
           sudo systemctl enable nginx
           sudo systemctl start nginx
           
+          # Configure NGINX for Vendure
+          echo "🌐 Configuring NGINX..."
+          sudo tee /etc/nginx/sites-available/${{ env.APP_NAME }} > /dev/null << 'NGINXCONF'
+          # Bowa Vendure Backend NGINX Configuration
+          server {
+              listen 80;
+              server_name ${{ secrets.DOMAIN }} api.${{ secrets.DOMAIN }};
+              
+              # Redirect HTTP to HTTPS (uncomment when SSL is configured)
+              # return 301 https://$server_name$request_uri;
+              
+              # For now, serve HTTP directly
+              # Shop API
+              location /shop-api {
+                  proxy_pass http://127.0.0.1:${{ env.BACKEND_PORT }}/shop-api;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_cache_bypass $http_upgrade;
+                  proxy_read_timeout 86400;
+                  
+                  # CORS headers
+                  add_header Access-Control-Allow-Origin "*" always;
+                  add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS" always;
+                  add_header Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization" always;
+                  add_header Access-Control-Allow-Credentials true always;
+                  
+                  # Handle preflight requests
+                  if ($request_method = 'OPTIONS') {
+                      add_header Access-Control-Allow-Origin "*";
+                      add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS";
+                      add_header Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization";
+                      add_header Access-Control-Max-Age 86400;
+                      return 204;
+                  }
+              }
+              
+              # Admin API
+              location /admin-api {
+                  proxy_pass http://127.0.0.1:${{ env.BACKEND_PORT }}/admin-api;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_cache_bypass $http_upgrade;
+              }
+              
+              # Admin UI (if you want to serve it from same domain)
+              location /admin {
+                  proxy_pass http://127.0.0.1:${{ env.ADMIN_PORT }};
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_cache_bypass $http_upgrade;
+              }
+              
+              # Assets
+              location /assets {
+                  proxy_pass http://127.0.0.1:${{ env.BACKEND_PORT }}/assets;
+                  expires 1y;
+                  add_header Cache-Control "public, immutable";
+              }
+              
+              # Health check
+              location /health {
+                  proxy_pass http://127.0.0.1:${{ env.BACKEND_PORT }}/health;
+                  access_log off;
+              }
+              
+              # Root redirect
+              location / {
+                  return 302 /admin;
+              }
+          }
+          NGINXCONF
+          
+          # Enable site and restart NGINX
+          sudo ln -sf /etc/nginx/sites-available/${{ env.APP_NAME }} /etc/nginx/sites-enabled/
+          sudo rm -f /etc/nginx/sites-enabled/default
+          sudo nginx -t && sudo systemctl reload nginx
+          
           # Cleanup
           rm -f /tmp/deployment.tar.gz
           
@@ -231,16 +323,37 @@ jobs:
           # Verify application is running
           echo "🔍 Verifying application..."
           sleep 10
+          
+          # Test local application
           if curl -f http://localhost:${{ env.BACKEND_PORT }}/health 2>/dev/null; then
-              echo "✅ Application is responding on port ${{ env.BACKEND_PORT }}"
+              echo "✅ Application is responding locally on port ${{ env.BACKEND_PORT }}"
           else
               echo "⚠️ Application may not be responding yet (check logs with: pm2 logs)"
           fi
           
+          # Test NGINX proxy
+          if curl -f http://localhost/health 2>/dev/null; then
+              echo "✅ NGINX proxy is working"
+          else
+              echo "⚠️ NGINX proxy setup may need verification"
+          fi
+          
           # Show application info
-          echo "🌐 Application Details:"
+          echo ""
+          echo "🌐 Your Vendure Backend is now accessible at:"
+          echo "  📱 Shop API: http://${{ secrets.DOMAIN }}/shop-api"
+          echo "  🔧 Admin API: http://${{ secrets.DOMAIN }}/admin-api"
+          echo "  👤 Admin UI: http://${{ secrets.DOMAIN }}/admin"
+          echo "  🖼️ Assets: http://${{ secrets.DOMAIN }}/assets"
+          echo ""
+          echo "🔧 Replace localhost URLs in your frontend with:"
+          echo "  ❌ OLD: http://localhost:3000/shop-api"
+          echo "  ✅ NEW: http://${{ secrets.DOMAIN }}/shop-api"
+          echo ""
+          echo "📊 Management Commands:"
           echo "  - Directory: ${{ env.APP_DIR }}"
-          echo "  - Port: ${{ env.BACKEND_PORT }}"
-          echo "  - Logs: pm2 logs ${{ env.SERVICE_NAME }}-server"
-          echo "  - Status: pm2 status"
+          echo "  - PM2 Logs: pm2 logs ${{ env.SERVICE_NAME }}-server"
+          echo "  - PM2 Status: pm2 status"
+          echo "  - NGINX Status: sudo systemctl status nginx"
+          echo "  - NGINX Config Test: sudo nginx -t"
           EOF
